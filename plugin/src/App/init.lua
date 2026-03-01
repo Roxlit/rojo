@@ -2,6 +2,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 
 local Rojo = script:FindFirstAncestor("Rojo")
 local Plugin = Rojo.Plugin
@@ -131,32 +132,48 @@ function App:init()
 		toolbarIcon = Assets.Images.PluginButton,
 	})
 
-	if
-		RunService:IsEdit()
-		and self.serveSession == nil
-		and Settings:get("syncReminder")
-		and self:getLastSyncTimestamp()
-		and (self:isSyncLockAvailable())
-	then
-		self:addNotification("You've previously synced this place. Would you like to reconnect?", 300, {
-			Connect = {
-				text = "Connect",
-				style = "Solid",
-				layoutOrder = 1,
-				onClick = function(notification)
-					notification:dismiss()
-					self:startSession()
-				end,
-			},
-			Dismiss = {
-				text = "Dismiss",
-				style = "Bordered",
-				layoutOrder = 2,
-				onClick = function(notification)
-					notification:dismiss()
-				end,
-			},
-		})
+	if RunService:IsEdit() and self.serveSession == nil and (self:isSyncLockAvailable()) then
+		if Settings:get("autoConnect") then
+			-- Auto-connect: poll for a running Rojo server and connect without user interaction
+			task.spawn(function()
+				local host, port = self:getHostAndPort()
+				local probeUrl = string.format("http://%s:%s/api/rojo", host, port)
+
+				while self.serveSession == nil do
+					local success = pcall(function()
+						HttpService:GetAsync(probeUrl)
+					end)
+
+					if success and self.serveSession == nil then
+						Log.trace("Auto-connect: Found Rojo server at {}:{}", host, port)
+						self:startSession()
+						return
+					end
+
+					task.wait(3)
+				end
+			end)
+		elseif Settings:get("syncReminder") and self:getLastSyncTimestamp() then
+			self:addNotification("You've previously synced this place. Would you like to reconnect?", 300, {
+				Connect = {
+					text = "Connect",
+					style = "Solid",
+					layoutOrder = 1,
+					onClick = function(notification)
+						notification:dismiss()
+						self:startSession()
+					end,
+				},
+				Dismiss = {
+					text = "Dismiss",
+					style = "Bordered",
+					layoutOrder = 2,
+					onClick = function(notification)
+						notification:dismiss()
+					end,
+				},
+			})
+		end
 	end
 end
 
