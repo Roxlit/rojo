@@ -144,26 +144,39 @@ function App:init()
 			local launcherStatus = self.roxlitBridge:checkStatus()
 
 			if launcherStatus and launcherStatus.active then
-				-- Roxlit is running — auto-connect using the launcher's Rojo port
-				Log.trace("Roxlit launcher detected, auto-connecting...")
+				-- Roxlit is running — validate placeId before connecting
+				Log.trace("Roxlit launcher detected, checking placeId...")
 
-				-- Validate placeId before connecting
-				if not self.roxlitBridge:validatePlaceId(game.PlaceId) then
+				-- Store status so validatePlaceId can read it
+				self.roxlitBridge._lastStatus = launcherStatus
+
+				local validation = self.roxlitBridge:validatePlaceId(game.PlaceId)
+
+				if validation == "mismatch" then
+					-- Different place than the project — warn the user
 					self:addNotification(
-						"Warning: This place doesn't match the project configured in Roxlit. Sync may affect the wrong project.",
-						30,
+						"This place doesn't match the Roxlit project. Connect anyway and switch the linked place?",
+						0, -- Persistent until dismissed
 						{
 							Connect = {
-								text = "Connect Anyway",
-								style = "Bordered",
+								text = "Switch & Connect",
+								style = "Solid",
 								layoutOrder = 1,
 								onClick = function(notification)
 									notification:dismiss()
+									-- Update the linked placeId to this place
+									local placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+									self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
+									-- Connect
+									if launcherStatus.rojoPort then
+										self.setPort(tostring(launcherStatus.rojoPort))
+									end
 									self:startSession()
+									self.runCode:start()
 								end,
 							},
 							Dismiss = {
-								text = "Cancel",
+								text = "Don't Connect",
 								style = "Bordered",
 								layoutOrder = 2,
 								onClick = function(notification)
@@ -175,19 +188,18 @@ function App:init()
 					return
 				end
 
-				-- Link placeId to the project if not already linked
-				if launcherStatus.placeId == nil or launcherStatus.placeId == 0 then
+				if validation == "no_link" then
+					-- First time — link this place to the project
 					local placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
 					self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
 				end
 
-				-- Auto-connect to Rojo server
+				-- Match or first link — auto-connect
+				Log.trace("Roxlit auto-connecting to port {}...", launcherStatus.rojoPort or "default")
 				if launcherStatus.rojoPort then
 					self.setPort(tostring(launcherStatus.rojoPort))
 				end
 				self:startSession()
-
-				-- Start RunCode polling for MCP commands
 				self.runCode:start()
 				return
 			end

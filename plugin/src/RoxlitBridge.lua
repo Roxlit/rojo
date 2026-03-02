@@ -54,8 +54,8 @@ function RoxlitBridge:checkStatus(): LauncherStatus?
 	return {
 		active = data.active == true,
 		projectPath = data.projectPath,
-		placeId = data.placeId,
-		universeId = data.universeId,
+		placeId = data.linkedPlaceId,
+		universeId = data.linkedUniverseId,
 		rojoPort = data.rojoPort,
 	}
 end
@@ -101,16 +101,19 @@ function RoxlitBridge:getLastStatus(): LauncherStatus?
 end
 
 -- Check if a placeId matches the launcher's configured project.
--- Returns true if: no placeId configured, or placeIds match.
-function RoxlitBridge:validatePlaceId(studioPlaceId: number): boolean
+-- Returns: "match", "no_link" (first time), or "mismatch"
+function RoxlitBridge:validatePlaceId(studioPlaceId: number): string
 	local status = self._lastStatus
 	if not status or not status.active then
-		return true -- No launcher, allow anything
+		return "match" -- No launcher, allow anything
 	end
 	if not status.placeId or status.placeId == 0 then
-		return true -- No placeId configured, allow
+		return "no_link" -- No placeId configured yet (first time)
 	end
-	return status.placeId == studioPlaceId
+	if status.placeId == studioPlaceId then
+		return "match"
+	end
+	return "mismatch"
 end
 
 -- Send placeId to launcher for linking (first time connecting a place).
