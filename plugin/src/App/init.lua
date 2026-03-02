@@ -156,7 +156,7 @@ function App:init()
 					-- Different place than the project — warn the user
 					self:addNotification(
 						"This place doesn't match the Roxlit project. Connect anyway and switch the linked place?",
-						0, -- Persistent until dismissed
+						300, -- 5 minutes — long enough for user to decide
 						{
 							Connect = {
 								text = "Switch & Connect",
