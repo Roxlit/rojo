@@ -1,7 +1,7 @@
 local TextService = game:GetService("TextService")
 local HttpService = game:GetService("HttpService")
 
-local Rojo = script:FindFirstAncestor("Rojo")
+local Rojo = script:FindFirstAncestor("Roxlit")
 local Plugin = Rojo.Plugin
 local Packages = Rojo.Packages
 

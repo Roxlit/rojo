@@ -2,7 +2,7 @@ if not plugin then
 	return
 end
 
-local Rojo = script:FindFirstAncestor("Rojo")
+local Rojo = script:FindFirstAncestor("Roxlit")
 local Packages = Rojo.Packages
 
 local Log = require(Packages.Log)

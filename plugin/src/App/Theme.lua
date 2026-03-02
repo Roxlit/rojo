@@ -15,7 +15,7 @@ local function getStudio()
 	return _Studio
 end
 
-local Rojo = script:FindFirstAncestor("Rojo")
+local Rojo = script:FindFirstAncestor("Roxlit")
 local Packages = Rojo.Packages
 
 local Roact = require(Packages.Roact)

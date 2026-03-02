@@ -4,7 +4,7 @@ local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 
-local Rojo = script:FindFirstAncestor("Rojo")
+local Rojo = script:FindFirstAncestor("Roxlit")
 local Plugin = Rojo.Plugin
 local Packages = Rojo.Packages
 
@@ -23,6 +23,8 @@ local PatchSet = require(Plugin.PatchSet)
 local PatchTree = require(Plugin.PatchTree)
 local preloadAssets = require(Plugin.preloadAssets)
 local soundPlayer = require(Plugin.soundPlayer)
+local RoxlitBridge = require(Plugin.RoxlitBridge)
+local RunCode = require(Plugin.RunCode)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local Theme = require(script.Theme)
 
@@ -132,10 +134,66 @@ function App:init()
 		toolbarIcon = Assets.Images.PluginButton,
 	})
 
+	-- Initialize Roxlit bridge and RunCode module
+	self.roxlitBridge = RoxlitBridge.new()
+	self.runCode = RunCode.new()
+
 	if RunService:IsEdit() and self.serveSession == nil and (self:isSyncLockAvailable()) then
-		if Settings:get("autoConnect") then
-			-- Auto-connect: poll for a running Rojo server and connect without user interaction
-			task.spawn(function()
+		-- First: Check if Roxlit launcher is running and auto-connect through it
+		task.spawn(function()
+			local launcherStatus = self.roxlitBridge:checkStatus()
+
+			if launcherStatus and launcherStatus.active then
+				-- Roxlit is running — auto-connect using the launcher's Rojo port
+				Log.trace("Roxlit launcher detected, auto-connecting...")
+
+				-- Validate placeId before connecting
+				if not self.roxlitBridge:validatePlaceId(game.PlaceId) then
+					self:addNotification(
+						"Warning: This place doesn't match the project configured in Roxlit. Sync may affect the wrong project.",
+						30,
+						{
+							Connect = {
+								text = "Connect Anyway",
+								style = "Bordered",
+								layoutOrder = 1,
+								onClick = function(notification)
+									notification:dismiss()
+									self:startSession()
+								end,
+							},
+							Dismiss = {
+								text = "Cancel",
+								style = "Bordered",
+								layoutOrder = 2,
+								onClick = function(notification)
+									notification:dismiss()
+								end,
+							},
+						}
+					)
+					return
+				end
+
+				-- Link placeId to the project if not already linked
+				if launcherStatus.placeId == nil or launcherStatus.placeId == 0 then
+					local placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+					self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
+				end
+
+				-- Auto-connect to Rojo server
+				if launcherStatus.rojoPort then
+					self.setPort(tostring(launcherStatus.rojoPort))
+				end
+				self:startSession()
+
+				-- Start RunCode polling for MCP commands
+				self.runCode:start()
+				return
+			end
+
+			-- Roxlit not running — fall back to standard Rojo behavior
+			if Settings:get("autoConnect") then
 				local host, port = self:getHostAndPort()
 				local probeUrl = string.format("http://%s:%s/api/rojo", host, port)
 
@@ -152,34 +210,52 @@ function App:init()
 
 					task.wait(3)
 				end
-			end)
-		elseif Settings:get("syncReminder") and self:getLastSyncTimestamp() then
-			self:addNotification("You've previously synced this place. Would you like to reconnect?", 300, {
-				Connect = {
-					text = "Connect",
-					style = "Solid",
-					layoutOrder = 1,
-					onClick = function(notification)
-						notification:dismiss()
-						self:startSession()
-					end,
-				},
-				Dismiss = {
-					text = "Dismiss",
-					style = "Bordered",
-					layoutOrder = 2,
-					onClick = function(notification)
-						notification:dismiss()
-					end,
-				},
-			})
-		end
+			elseif Settings:get("syncReminder") and self:getLastSyncTimestamp() then
+				self:addNotification("You've previously synced this place. Would you like to reconnect?", 300, {
+					Connect = {
+						text = "Connect",
+						style = "Solid",
+						layoutOrder = 1,
+						onClick = function(notification)
+							notification:dismiss()
+							self:startSession()
+						end,
+					},
+					Dismiss = {
+						text = "Dismiss",
+						style = "Bordered",
+						layoutOrder = 2,
+						onClick = function(notification)
+							notification:dismiss()
+						end,
+					},
+				})
+			end
+		end)
+
+		-- Start Roxlit bridge polling for ongoing status changes
+		self.roxlitBridge:startPolling(function(status)
+			if status and status.active and self.serveSession == nil then
+				Log.trace("Roxlit launcher became active, auto-connecting...")
+				if status.rojoPort then
+					self.setPort(tostring(status.rojoPort))
+				end
+				self:startSession()
+				self.runCode:start()
+			end
+		end)
 	end
 end
 
 function App:willUnmount()
 	self.waypointConnection:Disconnect()
 	self.confirmationBindable:Destroy()
+	if self.roxlitBridge then
+		self.roxlitBridge:stopPolling()
+	end
+	if self.runCode then
+		self.runCode:stop()
+	end
 end
 
 function App:addNotification(
