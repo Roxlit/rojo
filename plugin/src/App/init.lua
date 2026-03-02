@@ -155,11 +155,11 @@ function App:init()
 				if validation == "mismatch" then
 					-- Different place than the project — warn the user
 					self:addNotification(
-						"This place doesn't match the Roxlit project. Connect anyway and switch the linked place?",
+						"This Roblox experience doesn't match your Roxlit project. Connect anyway and link this experience instead?",
 						300, -- 5 minutes — long enough for user to decide
 						{
 							Connect = {
-								text = "Switch & Connect",
+								text = "Link & Connect",
 								style = "Solid",
 								layoutOrder = 1,
 								onClick = function(notification)
