@@ -192,7 +192,19 @@ function App:init()
 				return
 			end
 
-			-- Roxlit not running — fall back to standard Rojo behavior
+			-- Roxlit not running — fall back to standard Rojo behavior and
+			-- start polling so we auto-connect if the launcher starts later
+			self.roxlitBridge:startPolling(function(status)
+				if status and status.active and self.serveSession == nil then
+					Log.trace("Roxlit launcher became active, auto-connecting...")
+					if status.rojoPort then
+						self.setPort(tostring(status.rojoPort))
+					end
+					self:startSession()
+					self.runCode:start()
+				end
+			end)
+
 			if Settings:get("autoConnect") then
 				local host, port = self:getHostAndPort()
 				local probeUrl = string.format("http://%s:%s/api/rojo", host, port)
@@ -230,18 +242,6 @@ function App:init()
 						end,
 					},
 				})
-			end
-		end)
-
-		-- Start Roxlit bridge polling for ongoing status changes
-		self.roxlitBridge:startPolling(function(status)
-			if status and status.active and self.serveSession == nil then
-				Log.trace("Roxlit launcher became active, auto-connecting...")
-				if status.rojoPort then
-					self.setPort(tostring(status.rojoPort))
-				end
-				self:startSession()
-				self.runCode:start()
 			end
 		end)
 	end
