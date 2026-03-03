@@ -36,6 +36,11 @@ function LogCapture:start()
 	end
 	self._running = true
 
+	-- Ensure HTTP requests work (plugin has PluginSecurity to set this)
+	if not HttpService.HttpEnabled then
+		HttpService.HttpEnabled = true
+	end
+
 	self._logConnection = LogService.MessageOut:Connect(function(message, messageType)
 		if not self._running then
 			return
