@@ -36,10 +36,12 @@ function LogCapture:start()
 	end
 	self._running = true
 
-	-- Ensure HTTP requests work (plugin has PluginSecurity to set this)
 	if not HttpService.HttpEnabled then
-		HttpService.HttpEnabled = true
+		warn("[LogCapture] HttpService.HttpEnabled is false — enable it in Experience Settings > Security. Logs will not be captured.")
+		return
 	end
+
+	print("[LogCapture] Started")
 
 	self._logConnection = LogService.MessageOut:Connect(function(message, messageType)
 		if not self._running then
@@ -110,13 +112,16 @@ function LogCapture:_flush()
 	local batch = self._buffer
 	self._buffer = {}
 
-	pcall(function()
+	local ok, err = pcall(function()
 		HttpService:PostAsync(
 			LAUNCHER_URL .. "/log",
 			HttpService:JSONEncode(batch),
 			Enum.HttpContentType.ApplicationJson
 		)
 	end)
+	if not ok then
+		warn("[LogCapture] flush failed:", err)
+	end
 end
 
 return LogCapture

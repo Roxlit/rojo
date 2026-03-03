@@ -140,6 +140,9 @@ function App:init()
 	self.runCode = RunCode.new()
 	self.logCapture = LogCapture.new()
 
+	-- Start log capture immediately — independent of Rojo connection
+	self.logCapture:start()
+
 	if RunService:IsEdit() and self.serveSession == nil and (self:isSyncLockAvailable()) then
 		-- First: Check if Roxlit launcher is running and auto-connect through it
 		task.spawn(function()
@@ -175,9 +178,6 @@ function App:init()
 
 			-- Start polling to keep launcher status updated
 			self.roxlitBridge:startPolling(function() end)
-
-			-- Start capturing Studio output to send to launcher
-			self.logCapture:start()
 
 			-- Track whether user explicitly rejected mismatch connection
 			local userRejected = false
