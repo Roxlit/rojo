@@ -26,6 +26,7 @@ function LogCapture.new()
 	self._running = false
 	self._logConnection = nil
 	self._wasRunning = false
+	self._playtestCount = 0
 	self._buffer = {}
 	self._flushErrors = 0
 	return self
@@ -64,22 +65,27 @@ function LogCapture:start()
 		end
 	end)
 
-	-- Detect playtest start to rotate output.log (poll-based, Running is not a property)
+	-- Detect playtest start/end and insert markers (poll-based, Running is not a property)
 	task.spawn(function()
 		while self._running do
 			local isRunning = RunService:IsRunning()
 			if isRunning and not self._wasRunning then
 				self._wasRunning = true
+				self._playtestCount += 1
+				table.insert(self._buffer, {
+					message = string.format("PLAYTEST #%d START", self._playtestCount),
+					level = "marker",
+					timestamp = os.clock(),
+				})
 				self:_flush()
-				pcall(function()
-					HttpService:PostAsync(
-						LAUNCHER_URL .. "/playtest-start",
-						"{}",
-						Enum.HttpContentType.ApplicationJson
-					)
-				end)
-			elseif not isRunning then
+			elseif not isRunning and self._wasRunning then
 				self._wasRunning = false
+				table.insert(self._buffer, {
+					message = string.format("PLAYTEST #%d END", self._playtestCount),
+					level = "marker",
+					timestamp = os.clock(),
+				})
+				self:_flush()
 			end
 			task.wait(0.5)
 		end
