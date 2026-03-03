@@ -138,7 +138,7 @@ function App:init()
 	-- Initialize Roxlit bridge, RunCode, and LogCapture modules
 	self.roxlitBridge = RoxlitBridge.new()
 	self.runCode = RunCode.new()
-	self.logCapture = LogCapture.new(self.roxlitBridge)
+	self.logCapture = LogCapture.new()
 
 	if RunService:IsEdit() and self.serveSession == nil and (self:isSyncLockAvailable()) then
 		-- First: Check if Roxlit launcher is running and auto-connect through it

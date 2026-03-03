@@ -18,9 +18,8 @@ local MAX_BATCH_SIZE = 100
 local LogCapture = {}
 LogCapture.__index = LogCapture
 
-function LogCapture.new(roxlitBridge)
+function LogCapture.new()
 	local self = setmetatable({}, LogCapture)
-	self._bridge = roxlitBridge
 	self._running = false
 	self._connection = nil
 	self._buffer = {}
@@ -75,12 +74,6 @@ end
 
 function LogCapture:_flush()
 	if #self._buffer == 0 then
-		return
-	end
-
-	local status = self._bridge:getLastStatus()
-	if not status or not status.active then
-		self._buffer = {}
 		return
 	end
 
