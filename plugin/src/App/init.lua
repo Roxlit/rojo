@@ -25,6 +25,7 @@ local preloadAssets = require(Plugin.preloadAssets)
 local soundPlayer = require(Plugin.soundPlayer)
 local RoxlitBridge = require(Plugin.RoxlitBridge)
 local RunCode = require(Plugin.RunCode)
+local LogCapture = require(Plugin.LogCapture)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local Theme = require(script.Theme)
 
@@ -134,88 +135,122 @@ function App:init()
 		toolbarIcon = Assets.Images.PluginButton,
 	})
 
-	-- Initialize Roxlit bridge and RunCode module
+	-- Initialize Roxlit bridge, RunCode, and LogCapture modules
 	self.roxlitBridge = RoxlitBridge.new()
 	self.runCode = RunCode.new()
+	self.logCapture = LogCapture.new(self.roxlitBridge)
 
 	if RunService:IsEdit() and self.serveSession == nil and (self:isSyncLockAvailable()) then
 		-- First: Check if Roxlit launcher is running and auto-connect through it
 		task.spawn(function()
 			local launcherStatus = self.roxlitBridge:checkStatus()
 
-			if launcherStatus and launcherStatus.active then
-				-- Roxlit is running — validate placeId before connecting
-				Log.trace("Roxlit launcher detected, checking placeId...")
+			-- Helper: probe Rojo server and connect when ready
+			local function connectToLauncher(port)
+				local probeUrl = string.format("http://localhost:%d/api/rojo", port)
+				Log.trace("Roxlit: waiting for Rojo server on port {}...", port)
 
-				-- Store status so validatePlaceId can read it
-				self.roxlitBridge._lastStatus = launcherStatus
+				for attempt = 1, 15 do
+					if self.serveSession ~= nil then
+						return
+					end
 
-				local validation = self.roxlitBridge:validatePlaceId(game.PlaceId)
+					local success = pcall(function()
+						HttpService:GetAsync(probeUrl)
+					end)
 
-				if validation == "mismatch" then
-					-- Different place than the project — warn the user
-					self:addNotification(
-						"This Roblox experience doesn't match your Roxlit project. Connect anyway and link this experience instead?",
-						300, -- 5 minutes — long enough for user to decide
-						{
-							Connect = {
-								text = "Link & Connect",
-								style = "Solid",
-								layoutOrder = 1,
-								onClick = function(notification)
-									notification:dismiss()
-									-- Update the linked placeId to this place
-									local placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
-									self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
-									-- Connect
-									if launcherStatus.rojoPort then
-										self.setPort(tostring(launcherStatus.rojoPort))
-									end
-									self:startSession()
-									self.runCode:start()
-								end,
-							},
-							Dismiss = {
-								text = "Don't Connect",
-								style = "Bordered",
-								layoutOrder = 2,
-								onClick = function(notification)
-									notification:dismiss()
-								end,
-							},
-						}
-					)
-					return
+					if success and self.serveSession == nil then
+						Log.trace("Roxlit: Rojo server ready after {} attempt(s), connecting", attempt)
+						self.setPort(tostring(port))
+						self:startSession()
+						self.runCode:start()
+						return
+					end
+
+					task.wait(1)
 				end
 
-				if validation == "no_link" then
-					-- First time — link this place to the project
-					local placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
-					self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
-				end
-
-				-- Match or first link — auto-connect
-				Log.trace("Roxlit auto-connecting to port {}...", launcherStatus.rojoPort or "default")
-				if launcherStatus.rojoPort then
-					self.setPort(tostring(launcherStatus.rojoPort))
-				end
-				self:startSession()
-				self.runCode:start()
-				return
+				Log.warn("Roxlit: Rojo server on port {} did not respond after 15 attempts", port)
 			end
 
-			-- Roxlit not running — fall back to standard Rojo behavior and
-			-- start polling so we auto-connect if the launcher starts later
-			self.roxlitBridge:startPolling(function(status)
-				if status and status.active and self.serveSession == nil then
-					Log.trace("Roxlit launcher became active, auto-connecting...")
-					if status.rojoPort then
-						self.setPort(tostring(status.rojoPort))
+			-- Start polling to keep launcher status updated
+			self.roxlitBridge:startPolling(function() end)
+
+			-- Start capturing Studio output to send to launcher
+			self.logCapture:start()
+
+			-- Track whether user explicitly rejected mismatch connection
+			local mismatchShown = false
+			local userRejected = false
+
+			-- Auto-reconnect loop: every 3s, check if we should connect.
+			-- This is the SOLE reconnection mechanism — it handles:
+			--   * Initial connect (launcher already running when Studio opens)
+			--   * Reconnect after stop/start cycles (even rapid ones)
+			--   * Late connect (launcher starts after Studio is already open)
+			-- Because it runs continuously, it doesn't depend on change-detection
+			-- and won't miss reconnection windows due to race conditions.
+			while true do
+				if self.serveSession == nil and not userRejected then
+					local status = self.roxlitBridge:checkStatus()
+					if status then
+						self.roxlitBridge._lastStatus = status
 					end
-					self:startSession()
-					self.runCode:start()
+
+					if status and status.active and status.rojoPort then
+						local validation = self.roxlitBridge:validatePlaceId(game.PlaceId)
+
+						if validation == "match" then
+							connectToLauncher(status.rojoPort)
+						elseif validation == "no_link" then
+							local ok, info = pcall(function()
+								return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+							end)
+							local placeName = ok and info and info.Name or nil
+							self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
+							connectToLauncher(status.rojoPort)
+						elseif validation == "mismatch" and not mismatchShown then
+							mismatchShown = true
+							self:addNotification(
+								"This Roblox experience doesn't match your Roxlit project. Connect anyway and link this experience instead?",
+								300,
+								{
+									Connect = {
+										text = "Link & Connect",
+										style = "Solid",
+										layoutOrder = 1,
+										onClick = function(notification)
+											notification:dismiss()
+											mismatchShown = false
+											local ok, info = pcall(function()
+												return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+											end)
+											local placeName = ok and info and info.Name or nil
+											self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
+											-- Next loop iteration will see "match" and connect
+										end,
+									},
+									Dismiss = {
+										text = "Don't Connect",
+										style = "Bordered",
+										layoutOrder = 2,
+										onClick = function(notification)
+											notification:dismiss()
+											userRejected = true
+										end,
+									},
+								}
+							)
+						end
+					end
 				end
-			end)
+
+				task.wait(3)
+			end
+
+			-- Note: code below this point is unreachable when Roxlit is active.
+			-- The legacy autoConnect/syncReminder code only runs if the while-loop
+			-- above is removed (i.e., for vanilla Rojo without Roxlit).
 
 			if Settings:get("autoConnect") then
 				local host, port = self:getHostAndPort()
@@ -267,6 +302,9 @@ function App:willUnmount()
 	end
 	if self.runCode then
 		self.runCode:stop()
+	end
+	if self.logCapture then
+		self.logCapture:stop()
 	end
 end
 
