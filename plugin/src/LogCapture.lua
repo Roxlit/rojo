@@ -5,11 +5,14 @@
 	from all scripts running in Studio. Batches messages and sends them to the
 	launcher's POST /log endpoint every 1.5 seconds.
 
+	Detects playtest start via RunService to rotate output logs per play session.
+
 	License: MPL-2.0 (new code for Roxlit, extends Rojo plugin)
 ]]
 
 local LogService = game:GetService("LogService")
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 
 local LAUNCHER_URL = "http://127.0.0.1:19556"
 local FLUSH_INTERVAL = 1.5
@@ -21,7 +24,8 @@ LogCapture.__index = LogCapture
 function LogCapture.new()
 	local self = setmetatable({}, LogCapture)
 	self._running = false
-	self._connection = nil
+	self._logConnection = nil
+	self._runConnection = nil
 	self._buffer = {}
 	return self
 end
@@ -32,7 +36,7 @@ function LogCapture:start()
 	end
 	self._running = true
 
-	self._connection = LogService.MessageOut:Connect(function(message, messageType)
+	self._logConnection = LogService.MessageOut:Connect(function(message, messageType)
 		if not self._running then
 			return
 		end
@@ -55,6 +59,21 @@ function LogCapture:start()
 		end
 	end)
 
+	-- Detect playtest start to rotate output.log
+	self._runConnection = RunService:GetPropertyChangedSignal("Running"):Connect(function()
+		if RunService:IsRunning() then
+			-- Flush pending logs before rotation
+			self:_flush()
+			pcall(function()
+				HttpService:PostAsync(
+					LAUNCHER_URL .. "/playtest-start",
+					"{}",
+					Enum.HttpContentType.ApplicationJson
+				)
+			end)
+		end
+	end)
+
 	task.spawn(function()
 		while self._running do
 			task.wait(FLUSH_INTERVAL)
@@ -65,9 +84,13 @@ end
 
 function LogCapture:stop()
 	self._running = false
-	if self._connection then
-		self._connection:Disconnect()
-		self._connection = nil
+	if self._logConnection then
+		self._logConnection:Disconnect()
+		self._logConnection = nil
+	end
+	if self._runConnection then
+		self._runConnection:Disconnect()
+		self._runConnection = nil
 	end
 	self:_flush()
 end
