@@ -25,7 +25,7 @@ function LogCapture.new()
 	local self = setmetatable({}, LogCapture)
 	self._running = false
 	self._logConnection = nil
-	self._runConnection = nil
+	self._wasRunning = false
 	self._buffer = {}
 	return self
 end
@@ -59,18 +59,24 @@ function LogCapture:start()
 		end
 	end)
 
-	-- Detect playtest start to rotate output.log
-	self._runConnection = RunService:GetPropertyChangedSignal("Running"):Connect(function()
-		if RunService:IsRunning() then
-			-- Flush pending logs before rotation
-			self:_flush()
-			pcall(function()
-				HttpService:PostAsync(
-					LAUNCHER_URL .. "/playtest-start",
-					"{}",
-					Enum.HttpContentType.ApplicationJson
-				)
-			end)
+	-- Detect playtest start to rotate output.log (poll-based, Running is not a property)
+	task.spawn(function()
+		while self._running do
+			local isRunning = RunService:IsRunning()
+			if isRunning and not self._wasRunning then
+				self._wasRunning = true
+				self:_flush()
+				pcall(function()
+					HttpService:PostAsync(
+						LAUNCHER_URL .. "/playtest-start",
+						"{}",
+						Enum.HttpContentType.ApplicationJson
+					)
+				end)
+			elseif not isRunning then
+				self._wasRunning = false
+			end
+			task.wait(0.5)
 		end
 	end)
 
@@ -87,10 +93,6 @@ function LogCapture:stop()
 	if self._logConnection then
 		self._logConnection:Disconnect()
 		self._logConnection = nil
-	end
-	if self._runConnection then
-		self._runConnection:Disconnect()
-		self._runConnection = nil
 	end
 	self:_flush()
 end
