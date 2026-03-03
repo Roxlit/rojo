@@ -74,16 +74,23 @@ function RoxlitBridge:startPolling(onStatusChange: (LauncherStatus?) -> ())
 			local status = self:checkStatus()
 			local wasActive = self._lastStatus and self._lastStatus.active
 			local isActive = status and status.active
+			local oldPort = self._lastStatus and self._lastStatus.rojoPort
+			local newPort = status and status.rojoPort
 
-			-- Notify on state change (nil→active, active→nil, placeId change, etc.)
-			if wasActive ~= isActive or self._lastStatus == nil then
+			-- Notify on state change: active toggle, first poll, or rojo port change
+			local changed = wasActive ~= isActive
+				or self._lastStatus == nil
+				or (isActive and oldPort ~= newPort)
+
+			if changed then
 				self._lastStatus = status
 				if self._onStatusChange then
 					self._onStatusChange(status)
 				end
+			else
+				self._lastStatus = status
 			end
 
-			self._lastStatus = status
 			task.wait(POLL_INTERVAL)
 		end
 	end)
