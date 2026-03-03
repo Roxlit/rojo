@@ -27,6 +27,7 @@ function LogCapture.new()
 	self._logConnection = nil
 	self._wasRunning = false
 	self._buffer = {}
+	self._flushErrors = 0
 	return self
 end
 
@@ -34,14 +35,11 @@ function LogCapture:start()
 	if self._running then
 		return
 	end
-	self._running = true
-
-	if not HttpService.HttpEnabled then
-		warn("[LogCapture] HttpService.HttpEnabled is false — enable it in Experience Settings > Security. Logs will not be captured.")
+	-- Only run in edit mode — LogService.MessageOut captures ALL contexts (server+client)
+	if not RunService:IsEdit() then
 		return
 	end
-
-	print("[LogCapture] Started")
+	self._running = true
 
 	self._logConnection = LogService.MessageOut:Connect(function(message, messageType)
 		if not self._running then
@@ -120,7 +118,14 @@ function LogCapture:_flush()
 		)
 	end)
 	if not ok then
-		warn("[LogCapture] flush failed:", err)
+		self._flushErrors += 1
+		if self._flushErrors <= 3 then
+			warn("[LogCapture] flush failed:", err)
+		end
+	else
+		if self._flushErrors > 0 then
+			self._flushErrors = 0
+		end
 	end
 end
 
