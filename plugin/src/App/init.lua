@@ -180,16 +180,10 @@ function App:init()
 			self.logCapture:start()
 
 			-- Track whether user explicitly rejected mismatch connection
-			local mismatchShown = false
 			local userRejected = false
+			local mismatchNotifActive = false
 
 			-- Auto-reconnect loop: every 3s, check if we should connect.
-			-- This is the SOLE reconnection mechanism — it handles:
-			--   * Initial connect (launcher already running when Studio opens)
-			--   * Reconnect after stop/start cycles (even rapid ones)
-			--   * Late connect (launcher starts after Studio is already open)
-			-- Because it runs continuously, it doesn't depend on change-detection
-			-- and won't miss reconnection windows due to race conditions.
 			while true do
 				if self.serveSession == nil and not userRejected then
 					local status = self.roxlitBridge:checkStatus()
@@ -197,23 +191,40 @@ function App:init()
 						self.roxlitBridge._lastStatus = status
 					end
 
+					-- Debug: log what the loop sees
+					if status then
+						print(string.format(
+							"[roxlit-debug] active=%s rojoPort=%s launcherPlaceId=%s studioPlaceId=%s",
+							tostring(status.active),
+							tostring(status.rojoPort),
+							tostring(status.placeId),
+							tostring(game.PlaceId)
+						))
+					else
+						print("[roxlit-debug] checkStatus=nil (launcher not reachable)")
+					end
+
 					if status and status.active and status.rojoPort then
 						local validation = self.roxlitBridge:validatePlaceId(game.PlaceId)
+						print("[roxlit-debug] validation=" .. validation)
 
 						if validation == "match" then
+							print("[roxlit-debug] connecting to port " .. tostring(status.rojoPort))
 							connectToLauncher(status.rojoPort)
 						elseif validation == "no_link" then
+							print("[roxlit-debug] no placeId linked, linking and connecting")
 							local ok, info = pcall(function()
 								return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
 							end)
 							local placeName = ok and info and info.Name or nil
 							self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
 							connectToLauncher(status.rojoPort)
-						elseif validation == "mismatch" and not mismatchShown then
-							mismatchShown = true
+						elseif validation == "mismatch" and not mismatchNotifActive then
+							print("[roxlit-debug] placeId mismatch, showing notification")
+							mismatchNotifActive = true
 							self:addNotification(
-								"This Roblox experience doesn't match your Roxlit project. Connect anyway and link this experience instead?",
-								300,
+								"This Roblox experience doesn't match your Roxlit project. Connect anyway?",
+								30,
 								{
 									Connect = {
 										text = "Link & Connect",
@@ -221,13 +232,12 @@ function App:init()
 										layoutOrder = 1,
 										onClick = function(notification)
 											notification:dismiss()
-											mismatchShown = false
+											mismatchNotifActive = false
 											local ok, info = pcall(function()
 												return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
 											end)
 											local placeName = ok and info and info.Name or nil
 											self.roxlitBridge:linkPlace(game.PlaceId, game.GameId, placeName)
-											-- Next loop iteration will see "match" and connect
 										end,
 									},
 									Dismiss = {
@@ -236,6 +246,7 @@ function App:init()
 										layoutOrder = 2,
 										onClick = function(notification)
 											notification:dismiss()
+											mismatchNotifActive = false
 											userRejected = true
 										end,
 									},
