@@ -1,8 +1,10 @@
 --[[
-	Telemetry: Tracks properties of instances registered via _G._roxlit_telemetry.
+	Telemetry: Real-time property tracking for debugging.
 
-	AI tools call `telemetry_track` which runs code like:
-	  _G._roxlit_telemetry:track(workspace.MyCar.Chassis, "CFrame,AssemblyLinearVelocity")
+	The AI registers trackers via MCP → launcher HTTP. This module polls the
+	launcher for tracker definitions and resolves paths lazily using FindFirstChild.
+	Instances don't need to exist when trackers are registered — they activate
+	automatically when found (e.g. during playtest).
 
 	Data is sent to the launcher via POST /telemetry every flush cycle.
 	Only changes above a significance threshold are recorded to avoid noise.
@@ -15,6 +17,7 @@ local RunService = game:GetService("RunService")
 
 local LAUNCHER_URL = "http://127.0.0.1:19556"
 local FLUSH_INTERVAL = 1 -- seconds between flushes to launcher
+local POLL_INTERVAL = 3 -- seconds between polling launcher for tracker config
 local SAMPLE_INTERVAL = 5 -- sample every N heartbeats (~12 samples/sec at 60fps)
 local POSITION_THRESHOLD = 0.1 -- studs
 local ANGLE_THRESHOLD = 0.5 -- degrees
@@ -28,33 +31,37 @@ function Telemetry.new()
 	self._running = false
 	self._heartbeatConn = nil
 	self._frameCount = 0
-	self._buffer = {} -- array of telemetry entries
-	self._lastValues = {} -- [instKey][property] = last recorded value
-	self._tracked = {} -- array of { instance, properties }
+	self._buffer = {} -- array of telemetry lines
+	self._lastValues = {} -- [path][property] = last recorded value
+	self._trackers = {} -- array of { path, properties, group, enabled } from launcher
+	self._resolved = {} -- [path] = Instance or false (cache)
 	self._startTime = 0
 	return self
 end
 
--- Register an instance for tracking
-function Telemetry:track(instance, properties)
-	-- Remove existing entry for same instance
-	for i, entry in self._tracked do
-		if entry.instance == instance then
-			table.remove(self._tracked, i)
-			break
-		end
+-- Resolve a dot-separated path using FindFirstChild (handles spaces in names)
+local function resolvePath(pathStr)
+	local parts = string.split(pathStr, ".")
+	if #parts == 0 then
+		return nil
 	end
-	table.insert(self._tracked, { instance = instance, properties = properties })
-end
 
--- Unregister an instance from tracking
-function Telemetry:untrack(instance)
-	for i, entry in self._tracked do
-		if entry.instance == instance then
-			table.remove(self._tracked, i)
-			break
-		end
+	-- Start from game, skip "game" if present
+	local current = game
+	local startIdx = 1
+	if parts[1] == "game" then
+		startIdx = 2
 	end
+
+	for i = startIdx, #parts do
+		local child = current:FindFirstChild(parts[i])
+		if not child then
+			return nil
+		end
+		current = child
+	end
+
+	return current
 end
 
 -- Format a value for logging (human-readable)
@@ -102,7 +109,6 @@ local function significantChange(old, new)
 	end
 end
 
--- Get the context label (client or server)
 local function getContext()
 	if RunService:IsClient() then
 		return "CLIENT"
@@ -111,27 +117,77 @@ local function getContext()
 	end
 end
 
+-- Poll the launcher for tracker definitions
+function Telemetry:_pollTrackers()
+	local ok, result = pcall(function()
+		return HttpService:GetAsync(LAUNCHER_URL .. "/telemetry/trackers")
+	end)
+
+	if ok and result then
+		local parseOk, trackers = pcall(function()
+			return HttpService:JSONDecode(result)
+		end)
+		if parseOk and type(trackers) == "table" then
+			-- Check if config changed (simple length + path comparison)
+			local changed = #trackers ~= #self._trackers
+			if not changed then
+				for i, t in trackers do
+					local old = self._trackers[i]
+					if not old or old.path ~= t.path or old.properties ~= t.properties or old.enabled ~= t.enabled then
+						changed = true
+						break
+					end
+				end
+			end
+
+			if changed then
+				self._trackers = trackers
+				-- Clear resolve cache so paths get re-resolved
+				self._resolved = {}
+			end
+		end
+	end
+end
+
 -- Sample all tracked instances
 function Telemetry:_sample()
-	if #self._tracked == 0 then
+	if #self._trackers == 0 then
 		return
 	end
 
 	local elapsed = os.clock() - self._startTime
 	local context = getContext()
 
-	for _, entry in self._tracked do
-		local inst = entry.instance
-		local propList = entry.properties
-
-		-- Skip destroyed instances
-		if not inst.Parent then
+	for _, tracker in self._trackers do
+		-- Skip disabled trackers
+		if tracker.enabled == false then
 			continue
 		end
 
-		local instKey = inst:GetFullName()
-		if not self._lastValues[instKey] then
-			self._lastValues[instKey] = {}
+		local path = tracker.path
+		local propList = tracker.properties
+
+		-- Resolve path (with cache)
+		local inst = self._resolved[path]
+		if inst == nil then
+			-- Not cached yet — try to resolve
+			inst = resolvePath(path)
+			self._resolved[path] = inst or false -- cache nil as false
+		end
+
+		-- Skip unresolved or destroyed instances
+		if not inst or inst == false then
+			continue
+		end
+		if not inst.Parent then
+			-- Instance was destroyed, clear cache
+			self._resolved[path] = nil
+			self._lastValues[path] = nil
+			continue
+		end
+
+		if not self._lastValues[path] then
+			self._lastValues[path] = {}
 		end
 
 		local parts = {}
@@ -144,20 +200,23 @@ function Telemetry:_sample()
 			end)
 
 			if ok then
-				local lastVal = self._lastValues[instKey][propName]
+				local lastVal = self._lastValues[path][propName]
 				if significantChange(lastVal, value) then
 					hasChange = true
-					self._lastValues[instKey][propName] = value
+					self._lastValues[path][propName] = value
 				end
 				table.insert(parts, propName .. ": " .. formatValue(value))
 			end
 		end
 
 		if hasChange then
+			local group = tracker.group or ""
+			local prefix = if group ~= "" and group ~= "default" then "[" .. group .. "] " else ""
 			local line = string.format(
-				"[T+%.3f] [%s] %s %s",
+				"[T+%.3f] [%s] %s%s %s",
 				elapsed,
 				context,
+				prefix,
 				inst.Name,
 				table.concat(parts, " | ")
 			)
@@ -196,10 +255,8 @@ function Telemetry:start()
 	self._frameCount = 0
 	self._buffer = {}
 	self._lastValues = {}
-	self._tracked = {}
-
-	-- Expose globally so run_code can register instances
-	_G._roxlit_telemetry = self
+	self._trackers = {}
+	self._resolved = {}
 
 	-- Heartbeat for sampling
 	self._heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -213,10 +270,21 @@ function Telemetry:start()
 		end
 	end)
 
-	-- Flush loop
+	-- Poll + flush loop
 	task.spawn(function()
+		local pollCounter = 0
+		local pollEvery = math.ceil(POLL_INTERVAL / FLUSH_INTERVAL)
 		while self._running do
 			task.wait(FLUSH_INTERVAL)
+			pollCounter += 1
+
+			-- Poll for tracker config every POLL_INTERVAL seconds
+			if pollCounter % pollEvery == 0 then
+				self:_pollTrackers()
+				-- Clear resolve cache periodically so new instances get found
+				self._resolved = {}
+			end
+
 			self:_flush()
 		end
 	end)
@@ -225,7 +293,6 @@ end
 -- Stop telemetry collection
 function Telemetry:stop()
 	self._running = false
-	_G._roxlit_telemetry = nil
 	if self._heartbeatConn then
 		self._heartbeatConn:Disconnect()
 		self._heartbeatConn = nil
