@@ -1,8 +1,8 @@
 --[[
-	Telemetry: Auto-tracks properties of marked instances and sends data to the launcher.
+	Telemetry: Tracks properties of instances registered via _G._roxlit_telemetry.
 
-	Instances with a `_roxlit_track` attribute are monitored. The attribute value
-	is a comma-separated list of property names to track (e.g. "CFrame,AssemblyLinearVelocity").
+	AI tools call `telemetry_track` which runs code like:
+	  _G._roxlit_telemetry:track(workspace.MyCar.Chassis, "CFrame,AssemblyLinearVelocity")
 
 	Data is sent to the launcher via POST /telemetry every flush cycle.
 	Only changes above a significance threshold are recorded to avoid noise.
@@ -29,9 +29,32 @@ function Telemetry.new()
 	self._heartbeatConn = nil
 	self._frameCount = 0
 	self._buffer = {} -- array of telemetry entries
-	self._lastValues = {} -- [instance][property] = last recorded value
+	self._lastValues = {} -- [instKey][property] = last recorded value
+	self._tracked = {} -- array of { instance, properties }
 	self._startTime = 0
 	return self
+end
+
+-- Register an instance for tracking
+function Telemetry:track(instance, properties)
+	-- Remove existing entry for same instance
+	for i, entry in self._tracked do
+		if entry.instance == instance then
+			table.remove(self._tracked, i)
+			break
+		end
+	end
+	table.insert(self._tracked, { instance = instance, properties = properties })
+end
+
+-- Unregister an instance from tracking
+function Telemetry:untrack(instance)
+	for i, entry in self._tracked do
+		if entry.instance == instance then
+			table.remove(self._tracked, i)
+			break
+		end
+	end
 end
 
 -- Format a value for logging (human-readable)
@@ -48,12 +71,8 @@ local function formatValue(value)
 		return string.format("%.1f,%.1f,%.1f", value.X, value.Y, value.Z)
 	elseif typeof(value) == "Vector2" then
 		return string.format("%.1f,%.1f", value.X, value.Y)
-	elseif typeof(value) == "EnumItem" then
-		return tostring(value)
 	elseif type(value) == "number" then
 		return string.format("%.2f", value)
-	elseif type(value) == "boolean" then
-		return tostring(value)
 	else
 		return tostring(value)
 	end
@@ -92,37 +111,24 @@ local function getContext()
 	end
 end
 
--- Find all instances with _roxlit_track attribute in the DataModel
-local function findTrackedInstances()
-	local tracked = {}
-
-	local function scan(parent)
-		for _, child in parent:GetChildren() do
-			local ok, attr = pcall(function()
-				return child:GetAttribute("_roxlit_track")
-			end)
-			if ok and type(attr) == "string" and attr ~= "" then
-				table.insert(tracked, { instance = child, properties = attr })
-			end
-			scan(child)
-		end
-	end
-
-	scan(game)
-	return tracked
-end
-
 -- Sample all tracked instances
 function Telemetry:_sample()
-	local tracked = findTrackedInstances()
+	if #self._tracked == 0 then
+		return
+	end
+
 	local elapsed = os.clock() - self._startTime
 	local context = getContext()
 
-	for _, entry in tracked do
+	for _, entry in self._tracked do
 		local inst = entry.instance
 		local propList = entry.properties
 
-		-- Initialize last values table for this instance
+		-- Skip destroyed instances
+		if not inst.Parent then
+			continue
+		end
+
 		local instKey = inst:GetFullName()
 		if not self._lastValues[instKey] then
 			self._lastValues[instKey] = {}
@@ -190,6 +196,10 @@ function Telemetry:start()
 	self._frameCount = 0
 	self._buffer = {}
 	self._lastValues = {}
+	self._tracked = {}
+
+	-- Expose globally so run_code can register instances
+	_G._roxlit_telemetry = self
 
 	-- Heartbeat for sampling
 	self._heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -215,6 +225,7 @@ end
 -- Stop telemetry collection
 function Telemetry:stop()
 	self._running = false
+	_G._roxlit_telemetry = nil
 	if self._heartbeatConn then
 		self._heartbeatConn:Disconnect()
 		self._heartbeatConn = nil
