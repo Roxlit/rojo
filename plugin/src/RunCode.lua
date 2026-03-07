@@ -108,6 +108,22 @@ function RunCode:_execute(code: string): (boolean, string)
 			table.insert(output, line)
 			originalWarn(...)
 		end,
+		-- Safe literal string replacement (no pattern interpretation, no % issues)
+		_replace = function(str: string, old: string, new: string): string
+			local result = {}
+			local i = 1
+			local oldLen = #old
+			while i <= #str do
+				if str:sub(i, i + oldLen - 1) == old then
+					table.insert(result, new)
+					i += oldLen
+				else
+					table.insert(result, str:sub(i, i))
+					i += 1
+				end
+			end
+			return table.concat(result)
+		end,
 		game = game,
 		workspace = workspace,
 		script = script,
