@@ -26,6 +26,7 @@ local soundPlayer = require(Plugin.soundPlayer)
 local RoxlitBridge = require(Plugin.RoxlitBridge)
 local RunCode = require(Plugin.RunCode)
 local LogCapture = require(Plugin.LogCapture)
+local Telemetry = require(Plugin.Telemetry)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local Theme = require(script.Theme)
 
@@ -135,13 +136,15 @@ function App:init()
 		toolbarIcon = Assets.Images.PluginButton,
 	})
 
-	-- Initialize Roxlit bridge, RunCode, and LogCapture modules
+	-- Initialize Roxlit bridge, RunCode, LogCapture, and Telemetry modules
 	self.roxlitBridge = RoxlitBridge.new()
 	self.runCode = RunCode.new()
 	self.logCapture = LogCapture.new()
+	self.telemetry = Telemetry.new()
 
-	-- Start log capture immediately — independent of Rojo connection
+	-- Start log capture and telemetry immediately — independent of Rojo connection
 	self.logCapture:start()
+	self.telemetry:start()
 
 	if RunService:IsEdit() and self.serveSession == nil and (self:isSyncLockAvailable()) then
 		-- First: Check if Roxlit launcher is running and auto-connect through it
@@ -316,6 +319,9 @@ function App:willUnmount()
 	end
 	if self.logCapture then
 		self.logCapture:stop()
+	end
+	if self.telemetry then
+		self.telemetry:stop()
 	end
 end
 
